@@ -6,12 +6,15 @@ import android.app.usage.StorageStatsManager
 import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.os.storage.StorageManager
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.AttributeSet
+import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.os.bundleOf
 import androidx.core.view.children
@@ -23,6 +26,7 @@ import org.fossify.commons.extensions.beVisible
 import org.fossify.commons.extensions.beVisibleIf
 import org.fossify.commons.extensions.fadeIn
 import org.fossify.commons.extensions.formatSize
+import org.fossify.commons.extensions.getDoesFilePathExist
 import org.fossify.commons.extensions.getIsPathDirectory
 import org.fossify.commons.extensions.getLongValue
 import org.fossify.commons.extensions.getProperBackgroundColor
@@ -47,6 +51,7 @@ import org.fossify.filemanager.databinding.ItemStorageVolumeBinding
 import org.fossify.filemanager.databinding.StorageFragmentBinding
 import org.fossify.filemanager.extensions.config
 import org.fossify.filemanager.extensions.getAllVolumeNames
+import org.fossify.filemanager.extensions.isPathInHiddenFolder
 import org.fossify.filemanager.helpers.ARCHIVES
 import org.fossify.filemanager.helpers.AUDIO
 import org.fossify.filemanager.helpers.DOCUMENTS
@@ -62,6 +67,7 @@ import org.fossify.filemanager.helpers.extraDocumentMimeTypes
 import org.fossify.filemanager.helpers.getListItemsFromFileDirItems
 import org.fossify.filemanager.interfaces.ItemOperationsListener
 import org.fossify.filemanager.models.ListItem
+import java.io.File
 import java.util.Locale
 
 class StorageFragment(
@@ -69,6 +75,7 @@ class StorageFragment(
     attributeSet: AttributeSet
 ) : MyViewPagerFragment<MyViewPagerFragment.StorageInnerBinding>(context, attributeSet), ItemOperationsListener {
     private val SIZE_DIVIDER = 100000
+    private val NEW_FILES_LIMIT = 8
     private var allDeviceListItems = ArrayList<ListItem>()
     private var lastSearchedText = ""
     private lateinit var binding: StorageFragmentBinding
@@ -161,23 +168,12 @@ class StorageFragment(
                 mainStorageUsageProgressbar.setIndicatorColor(properPrimaryColor)
                 mainStorageUsageProgressbar.trackColor = properPrimaryColor.adjustAlpha(LOWER_ALPHA)
 
-                imagesProgressbar.setIndicatorColor(redColor)
-                imagesProgressbar.trackColor = redColor.adjustAlpha(LOWER_ALPHA)
-
-                videosProgressbar.setIndicatorColor(greenColor)
-                videosProgressbar.trackColor = greenColor.adjustAlpha(LOWER_ALPHA)
-
-                audioProgressbar.setIndicatorColor(lightBlueColor)
-                audioProgressbar.trackColor = lightBlueColor.adjustAlpha(LOWER_ALPHA)
-
-                documentsProgressbar.setIndicatorColor(yellowColor)
-                documentsProgressbar.trackColor = yellowColor.adjustAlpha(LOWER_ALPHA)
-
-                archivesProgressbar.setIndicatorColor(tealColor)
-                archivesProgressbar.trackColor = tealColor.adjustAlpha(LOWER_ALPHA)
-
-                othersProgressbar.setIndicatorColor(pinkColor)
-                othersProgressbar.trackColor = pinkColor.adjustAlpha(LOWER_ALPHA)
+                tintCategoryTile(imagesHolder.background, imagesIcon, redColor)
+                tintCategoryTile(videosHolder.background, videosIcon, greenColor)
+                tintCategoryTile(audioHolder.background, audioIcon, lightBlueColor)
+                tintCategoryTile(documentsHolder.background, documentsIcon, yellowColor)
+                tintCategoryTile(archivesHolder.background, archivesIcon, tealColor)
+                tintCategoryTile(othersHolder.background, othersIcon, pinkColor)
 
                 expandButton.applyColorFilter(context.getProperPrimaryColor())
             }
@@ -192,6 +188,11 @@ class StorageFragment(
         ensureBackgroundThread {
             getVolumeStorageStats(context)
         }
+    }
+
+    private fun tintCategoryTile(background: Drawable, icon: ImageView, color: Int) {
+        (background as? GradientDrawable)?.setColor(color.adjustAlpha(LOWER_ALPHA))
+        icon.applyColorFilter(color)
     }
 
     private fun launchMimetypeActivity(mimetype: String, volumeName: String) {
@@ -215,22 +216,11 @@ class StorageFragment(
             post {
                 volumes[volumeName]!!.apply {
                     imagesSize.text = fileSizeImages.formatSize()
-                    imagesProgressbar.progress = (fileSizeImages / SIZE_DIVIDER).toInt()
-
                     videosSize.text = fileSizeVideos.formatSize()
-                    videosProgressbar.progress = (fileSizeVideos / SIZE_DIVIDER).toInt()
-
                     audioSize.text = fileSizeAudios.formatSize()
-                    audioProgressbar.progress = (fileSizeAudios / SIZE_DIVIDER).toInt()
-
                     documentsSize.text = fileSizeDocuments.formatSize()
-                    documentsProgressbar.progress = (fileSizeDocuments / SIZE_DIVIDER).toInt()
-
                     archivesSize.text = fileSizeArchives.formatSize()
-                    archivesProgressbar.progress = (fileSizeArchives / SIZE_DIVIDER).toInt()
-
                     othersSize.text = fileSizeOthers.formatSize()
-                    othersProgressbar.progress = (fileSizeOthers / SIZE_DIVIDER).toInt()
                 }
             }
         }
@@ -324,17 +314,7 @@ class StorageFragment(
 
             post {
                 volumes[volumeName]?.apply {
-                    arrayOf(
-                        mainStorageUsageProgressbar,
-                        imagesProgressbar,
-                        videosProgressbar,
-                        audioProgressbar,
-                        documentsProgressbar,
-                        archivesProgressbar,
-                        othersProgressbar
-                    ).forEach {
-                        it.max = (totalStorageSpace / SIZE_DIVIDER).toInt()
-                    }
+                    mainStorageUsageProgressbar.max = (totalStorageSpace / SIZE_DIVIDER).toInt()
 
                     mainStorageUsageProgressbar.progress =
                         ((totalStorageSpace - freeStorageSpace) / SIZE_DIVIDER).toInt()
@@ -489,6 +469,74 @@ class StorageFragment(
             allDeviceListItems = getListItemsFromFileDirItems(ArrayList(fileDirItems))
         }
         setupLayoutManager()
+
+        ensureBackgroundThread {
+            getNewFiles { files ->
+                addNewFilesItems(files)
+            }
+        }
+    }
+
+    private fun getNewFiles(callback: (newFiles: ArrayList<ListItem>) -> Unit) {
+        val showHidden = context?.config?.shouldShowHidden() ?: return
+        val listItems = arrayListOf<ListItem>()
+
+        val uri = MediaStore.Files.getContentUri("external")
+        val projection = arrayOf(
+            MediaStore.Files.FileColumns.DATA,
+            MediaStore.Files.FileColumns.DISPLAY_NAME,
+            MediaStore.Files.FileColumns.DATE_MODIFIED,
+            MediaStore.Files.FileColumns.SIZE
+        )
+
+        try {
+            val queryArgs = bundleOf(
+                ContentResolver.QUERY_ARG_LIMIT to NEW_FILES_LIMIT,
+                ContentResolver.QUERY_ARG_SORT_COLUMNS to arrayOf(MediaStore.Files.FileColumns.DATE_MODIFIED),
+                ContentResolver.QUERY_ARG_SORT_DIRECTION to ContentResolver.QUERY_SORT_DIRECTION_DESCENDING
+            )
+
+            context?.contentResolver?.query(uri, projection, queryArgs, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    do {
+                        val path = cursor.getStringValue(MediaStore.Files.FileColumns.DATA)
+                        if (File(path).isDirectory) {
+                            continue
+                        }
+
+                        val name = cursor.getStringValue(MediaStore.Files.FileColumns.DISPLAY_NAME)
+                            ?: path.substringAfterLast('/')
+                        val size = cursor.getLongValue(MediaStore.Files.FileColumns.SIZE)
+                        val modified = cursor.getLongValue(MediaStore.Files.FileColumns.DATE_MODIFIED) * 1000
+                        val isHiddenFile = name.startsWith(".")
+                        val shouldShow = showHidden || (!isHiddenFile && !path.isPathInHiddenFolder())
+                        if (shouldShow && context?.getDoesFilePathExist(path) == true) {
+                            if (wantedMimeTypes.any { isProperMimeType(it, path, false) }) {
+                                listItems.add(ListItem(path, name, false, 0, size, modified, false, false))
+                            }
+                        }
+                    } while (cursor.moveToNext())
+                }
+            }
+        } catch (e: Exception) {
+        }
+
+        post {
+            callback(listItems)
+        }
+    }
+
+    private fun addNewFilesItems(newFiles: ArrayList<ListItem>) {
+        binding.apply {
+            newFilesLabel.beVisibleIf(newFiles.isNotEmpty())
+            newFilesList.beVisibleIf(newFiles.isNotEmpty())
+        }
+
+        ItemsAdapter(activity as SimpleActivity, newFiles, this, binding.newFilesList, isPickMultipleIntent, null, false) {
+            clickedPath((it as FileDirItem).path)
+        }.apply {
+            binding.newFilesList.adapter = this
+        }
     }
 
     override fun deleteFiles(files: ArrayList<FileDirItem>) {

@@ -12,6 +12,7 @@
     <string name="rooted_device_only">This operation works only on rooted devices</string>
     <string name="recents">Recents</string>
     <string name="show_recents">Show recents</string>
+    <string name="new_files">New files</string>
     <string name="invert_colors">Invert colors</string>
 
     <!-- Open as -->

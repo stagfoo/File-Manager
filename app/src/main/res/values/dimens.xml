@@ -2,4 +2,8 @@
     <dimen name="grid_view_icon_size">50dp</dimen>
     <dimen name="storage_free_space_text_size">46sp</dimen>
     <dimen name="default_status_action_height">86dp</dimen>
+    <dimen name="category_tile_height">96dp</dimen>
+    <dimen name="category_tile_icon_size">28dp</dimen>
+    <dimen name="category_tile_corner_radius">16dp</dimen>
+    <dimen name="category_tile_margin">6dp</dimen>
 </resources>
